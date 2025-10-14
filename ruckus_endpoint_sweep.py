@@ -1,6 +1,7 @@
 import sys
 import json
-from typing import Dict, List, Optional
+import argparse
+from typing import Dict, List, Optional, Tuple
 
 from ruckus_kpi_probe import (
     RuckusClient,
@@ -19,7 +20,6 @@ def print_header(title: str) -> None:
 
 def show_result_json(name: str, data: Dict) -> None:
     try:
-        # Print compact summary if list present
         if isinstance(data, dict) and "list" in data:
             items = data.get("list") or []
             print(f"{name}: OK (items={len(items)})")
@@ -41,7 +41,114 @@ def show_result_raw(
     print(f"{name}: bytes={len(content)}")
 
 
+def build_endpoints(
+    zone_id: Optional[str],
+    ap_id: Optional[str],
+    ap_mac: Optional[str],
+) -> List[Tuple[str, Optional[Dict[str, str]], bool, str]]:
+    """
+    Returns list of (path, params, is_raw, label)
+    """
+    items: List[Tuple[str, Optional[Dict[str, str]], bool, str]] = []
+
+    # Global endpoints (may require higher privilege; still attempt)
+    items.append(("cluster", None, False, "cluster"))
+    items.append((
+        "alarms",
+        {"listSize": "100"},
+        False,
+        "alarms",
+    ))
+    items.append((
+        "alarms/active",
+        {"listSize": "100"},
+        False,
+        "alarms_active",
+    ))
+    items.append((
+        "aps",
+        {"listSize": "1000"},
+        False,
+        "aps",
+    ))
+    items.append((
+        "clients",
+        {"listSize": "1000"},
+        False,
+        "clients",
+    ))
+
+    # Zone-scoped if zoneId provided
+    if zone_id:
+        items.append((f"rkszones/{zone_id}", None, False, "zone"))
+        items.append((
+            f"rkszones/{zone_id}/aps",
+            {"listSize": "1000"},
+            False,
+            "zone_aps",
+        ))
+        items.append((
+            f"rkszones/{zone_id}/clients",
+            {"listSize": "1000"},
+            False,
+            "zone_clients",
+        ))
+        items.append((
+            f"rkszones/{zone_id}/wlans",
+            {"listSize": "1000"},
+            False,
+            "zone_wlans",
+        ))
+
+        if ap_id:
+            items.append((
+                f"rkszones/{zone_id}/aps/{ap_id}",
+                None,
+                False,
+                "zone_ap_detail_by_id",
+            ))
+            items.append((
+                f"rkszones/{zone_id}/aps/{ap_id}/radios",
+                None,
+                False,
+                "zone_ap_radios_by_id",
+            ))
+        if ap_mac:
+            items.append((
+                f"rkszones/{zone_id}/aps/{ap_mac}/picture",
+                None,
+                True,
+                "zone_ap_picture_by_mac",
+            ))
+
+    return items
+
+
 def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Sweep common SmartZone endpoints; supports zone-scoped tests."
+        ),
+    )
+    parser.add_argument(
+        "--zone-id",
+        help="Zone ID to test zone-scoped endpoints.",
+    )
+    parser.add_argument(
+        "--ap-id",
+        help="AP ID for per-AP endpoints (detail, radios).",
+    )
+    parser.add_argument(
+        "--ap-mac",
+        help="AP MAC for picture endpoint.",
+    )
+    parser.add_argument(
+        "--extra",
+        action="append",
+        help="Extra endpoint path to GET (repeatable).",
+    )
+    args = parser.parse_args(argv)
+
     client = RuckusClient(
         base_url=RUCKUS_BASE_URL,
         username=RUCKUS_USERNAME,
@@ -59,74 +166,30 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     try:
-        # Cluster
-        print_header("Cluster")
-        try:
-            cluster = client.get_any("cluster")
-            show_result_json("cluster", cluster)
-        except Exception as e:  # noqa: BLE001
-            print(f"cluster: ERROR {e}")
+        tests = build_endpoints(args.zone_id, args.ap_id, args.ap_mac)
+        if args.extra:
+            for p in args.extra:
+                tests.append((
+                    p,
+                    None,
+                    False,
+                    f"extra_{p.replace('/', '_')}",
+                ))
 
-        # Alarms (active + all)
-        print_header("Alarms")
-        for path in ["alarms/active", "alarms"]:
+        for path, params, is_raw, label in tests:
+            print_header(label)
             try:
-                alarms = client.get_any(path, params={"listSize": 100})
-                name = path.replace("/", "_")
-                show_result_json(name, alarms)
+                if is_raw:
+                    status, headers, content = client.get_any_raw(
+                        path,
+                        params=params,
+                    )
+                    show_result_raw(label, status, headers, content)
+                else:
+                    data = client.get_any(path, params=params)
+                    show_result_json(label, data)
             except Exception as e:  # noqa: BLE001
-                print(f"{path}: ERROR {e}")
-
-        # APs and Clients (cap listSize at 1000)
-        print_header("APs")
-        ap_list: List[Dict] = []
-        try:
-            aps = client.get_any("aps", params={"listSize": 1000})
-            show_result_json("aps", aps)
-            # Extract list for subresource testing
-            ap_list = aps.get("list", []) if isinstance(aps, dict) else []
-        except Exception as e:  # noqa: BLE001
-            print(f"aps: ERROR {e}")
-
-        print_header("Clients")
-        try:
-            clients = client.get_any("clients", params={"listSize": 1000})
-            show_result_json("clients", clients)
-        except Exception as e:  # noqa: BLE001
-            print(f"clients: ERROR {e}")
-
-        # Test per-AP subresources for up to 3 APs
-        print_header("Per-AP subresources")
-        for ap in ap_list[:3]:
-            ap_id = ap.get("id") or ap.get("apId") or ap.get("serialNumber")
-            ap_name = ap.get("name") or ap_id
-            if not ap_id:
-                continue
-            # AP details
-            try:
-                data = client.get_any(f"aps/{ap_id}")
-                show_result_json(f"aps_{ap_name}", data)
-            except Exception as e:  # noqa: BLE001
-                print(f"aps/{ap_id}: ERROR {e}")
-            # Radios
-            try:
-                data = client.get_any(f"aps/{ap_id}/radios")
-                show_result_json(f"aps_{ap_name}_radios", data)
-            except Exception as e:  # noqa: BLE001
-                print(f"aps/{ap_id}/radios: ERROR {e}")
-            # Picture (raw)
-            try:
-                status, headers, content = client.get_any_raw(
-                    f"aps/{ap_id}/picture"
-                )
-                show_result_raw(
-                    f"aps_{ap_name}_picture",
-                    status,
-                    headers,
-                    content,
-                )
-            except Exception as e:  # noqa: BLE001
-                print(f"aps/{ap_id}/picture: ERROR {e}")
+                print(f"{label}: ERROR {e}")
 
     finally:
         print_header("Logout")
