@@ -8,6 +8,14 @@ import requests
 from requests import Session
 from urllib3.exceptions import InsecureRequestWarning
 
+# Lab/controller configuration (hardcoded)
+RUCKUS_BASE_URL = "https://3.12.57.221:8443"
+RUCKUS_USERNAME = "apireadonly"
+RUCKUS_PASSWORD = "SBAedge2112#"
+RUCKUS_DOMAIN = "System"
+RUCKUS_VERIFY_SSL = False
+RUCKUS_API_VERSION = "v9_1"
+
 # Suppress SSL warnings when VERIFY_SSL is false (lab environments)
 warnings.simplefilter("ignore", InsecureRequestWarning)
 
@@ -38,15 +46,9 @@ class RuckusClient:
         self.session: Session = requests.Session()
         self.session.verify = verify_ssl
         self.service_ticket: Optional[str] = None
-        self.api_version = os.getenv("RUCKUS_API_VERSION")
-        self.api_versions_to_try = (
-            [self.api_version] if self.api_version else api_versions_to_try
-        ) or [
-            "v12_0",
-            "v11_0",
-            "v10_0",
-            "v9_1",
-        ]
+        # Force v9_1 for your environment
+        self.api_version = RUCKUS_API_VERSION
+        self.api_versions_to_try = [RUCKUS_API_VERSION]
 
     def _api_root(self, version: str) -> str:
         return f"{self.base_url}/wsg/api/public/{version}"
@@ -60,8 +62,7 @@ class RuckusClient:
 
     def login(self) -> str:
         """
-        Obtain a serviceTicket, trying configured API versions
-        until one responds successfully.
+        Obtain a serviceTicket for the configured API version.
         """
         last_err: Optional[str] = None
         for version in self.api_versions_to_try:
@@ -90,7 +91,7 @@ class RuckusClient:
             except Exception as e:  # noqa: BLE001
                 last_err = str(e)
         raise RuntimeError(
-            "Login failed across versions "
+            "Login failed for version "
             f"{self.api_versions_to_try}: {last_err}"
         )
 
@@ -261,11 +262,12 @@ def print_section(title: str) -> None:
 
 
 def main() -> int:
-    base_url = os.getenv("RUCKUS_BASE_URL", "https://3.12.57.221:8443")
-    username = os.getenv("RUCKUS_USERNAME", "apireadonly")
-    password = os.getenv("RUCKUS_PASSWORD", "SBAedge2112#")
-    domain = os.getenv("RUCKUS_DOMAIN", "System")
-    verify_ssl = getenv_bool("RUCKUS_VERIFY_SSL", False)
+    # Use hardcoded config
+    base_url = RUCKUS_BASE_URL
+    username = RUCKUS_USERNAME
+    password = RUCKUS_PASSWORD
+    domain = RUCKUS_DOMAIN
+    verify_ssl = RUCKUS_VERIFY_SSL
 
     client = RuckusClient(
         base_url=base_url,

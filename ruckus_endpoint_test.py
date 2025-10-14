@@ -1,10 +1,16 @@
-import os
 import sys
 import argparse
 import json
 from typing import Optional
 
-from ruckus_kpi_probe import RuckusClient, getenv_bool
+from ruckus_kpi_probe import RuckusClient
+
+# Hardcoded v9.1 configuration
+RUCKUS_BASE_URL = "https://3.12.57.221:8443"
+RUCKUS_USERNAME = "apireadonly"
+RUCKUS_PASSWORD = "SBAedge2112#"
+RUCKUS_DOMAIN = "System"
+RUCKUS_VERIFY_SSL = False
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -38,18 +44,12 @@ def main(argv: Optional[list] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    base_url = os.getenv("RUCKUS_BASE_URL", "https://3.12.57.221:8443")
-    username = os.getenv("RUCKUS_USERNAME", "apireadonly")
-    password = os.getenv("RUCKUS_PASSWORD", "SBAedge2112#")
-    domain = os.getenv("RUCKUS_DOMAIN", "System")
-    verify_ssl = getenv_bool("RUCKUS_VERIFY_SSL", False)
-
     client = RuckusClient(
-        base_url=base_url,
-        username=username,
-        password=password,
-        domain=domain,
-        verify_ssl=verify_ssl,
+        base_url=RUCKUS_BASE_URL,
+        username=RUCKUS_USERNAME,
+        password=RUCKUS_PASSWORD,
+        domain=RUCKUS_DOMAIN,
+        verify_ssl=RUCKUS_VERIFY_SSL,
     )
 
     try:
