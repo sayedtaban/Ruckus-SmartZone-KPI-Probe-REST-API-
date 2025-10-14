@@ -141,19 +141,62 @@ class RuckusClient:
         headers = {k: v for k, v in resp.headers.items()}
         return resp.status_code, headers, resp.content
 
+    def get_zones(self, list_size: int = 1000) -> List[Dict[str, Any]]:
+        data = self._get("rkszones", params={"listSize": min(list_size, 1000)})
+        return data.get("list", []) if isinstance(data, dict) else []
+
     def get_aps(self, list_size: int = 1000) -> List[Dict[str, Any]]:
-        data = self._get("aps", params={"listSize": min(list_size, 1000)})
-        return data.get(
-            "list",
-            data.get("data", data if isinstance(data, list) else []),
-        )
+        try:
+            data = self._get("aps", params={"listSize": min(list_size, 1000)})
+            return data.get(
+                "list",
+                data.get("data", data if isinstance(data, list) else []),
+            )
+        except RuntimeError as e:
+            # Fallback to zone-scoped if lacking privilege
+            if "403" not in str(e):
+                raise
+            zones = self.get_zones()
+            all_aps: List[Dict[str, Any]] = []
+            for z in zones:
+                zid = z.get("id") or z.get("zoneId")
+                if not zid:
+                    continue
+                try:
+                    zdata = self._get(
+                        f"rkszones/{zid}/aps",
+                        params={"listSize": min(list_size, 1000)},
+                    )
+                    all_aps.extend(zdata.get("list", []))
+                except Exception:
+                    continue
+            return all_aps
 
     def get_clients(self, list_size: int = 1000) -> List[Dict[str, Any]]:
-        data = self._get("clients", params={"listSize": min(list_size, 1000)})
-        return data.get(
-            "list",
-            data.get("data", data if isinstance(data, list) else []),
-        )
+        try:
+            data = self._get("clients", params={"listSize": min(list_size, 1000)})
+            return data.get(
+                "list",
+                data.get("data", data if isinstance(data, list) else []),
+            )
+        except RuntimeError as e:
+            if "403" not in str(e):
+                raise
+            zones = self.get_zones()
+            all_clients: List[Dict[str, Any]] = []
+            for z in zones:
+                zid = z.get("id") or z.get("zoneId")
+                if not zid:
+                    continue
+                try:
+                    zdata = self._get(
+                        f"rkszones/{zid}/clients",
+                        params={"listSize": min(list_size, 1000)},
+                    )
+                    all_clients.extend(zdata.get("list", []))
+                except Exception:
+                    continue
+            return all_clients
 
     def get_alarms(self, list_size: int = 100) -> List[Dict[str, Any]]:
         # Some versions expose /alarms or /alarms/active
