@@ -124,10 +124,47 @@ def build_endpoints(
     return items
 
 
+def parse_endpoints_file(
+    path: str,
+    zone_id: Optional[str],
+    ap_id: Optional[str],
+    ap_mac: Optional[str],
+) -> List[Tuple[str, Optional[Dict[str, str]], bool, str]]:
+    """
+    Parse a simple endpoints file. Each non-empty, non-comment line is either:
+    - <PATH>
+    - <PATH> RAW
+    Placeholders {zoneId}, {apId}, {apMac} will be substituted.
+    """
+    result: List[Tuple[str, Optional[Dict[str, str]], bool, str]] = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                parts = s.split()
+                raw = False
+                p = parts[0]
+                if len(parts) > 1 and parts[1].upper() == "RAW":
+                    raw = True
+                p = (
+                    p.replace("{zoneId}", zone_id or "")
+                    .replace("{apId}", ap_id or "")
+                    .replace("{apMac}", ap_mac or "")
+                )
+                label = p.replace("/", "_") or "endpoint"
+                result.append((p, None, raw, label))
+    except Exception as e:  # noqa: BLE001
+        print(f"Failed to read endpoints file: {e}")
+    return result
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Sweep common SmartZone endpoints; supports zone-scoped tests."
+            "Sweep common SmartZone endpoints; supports zone-scoped tests"
+            " and custom endpoints file."
         ),
     )
     parser.add_argument(
@@ -147,6 +184,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="append",
         help="Extra endpoint path to GET (repeatable).",
     )
+    parser.add_argument(
+        "--endpoints-file",
+        help=(
+            "Path to a file with endpoints to test. Use placeholders "
+            "{zoneId}, {apId}, {apMac}; append 'RAW' to fetch binary."
+        ),
+    )
     args = parser.parse_args(argv)
 
     client = RuckusClient(
@@ -165,6 +209,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"Login failed: {e}")
         return 2
 
+    total = 0
+    ok = 0
+    errors = 0
+
     try:
         tests = build_endpoints(args.zone_id, args.ap_id, args.ap_mac)
         if args.extra:
@@ -175,8 +223,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                     False,
                     f"extra_{p.replace('/', '_')}",
                 ))
+        if args.endpoints_file:
+            tests.extend(
+                parse_endpoints_file(
+                    args.endpoints_file,
+                    args.zone_id,
+                    args.ap_id,
+                    args.ap_mac,
+                )
+            )
 
         for path, params, is_raw, label in tests:
+            total += 1
             print_header(label)
             try:
                 if is_raw:
@@ -188,12 +246,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                 else:
                     data = client.get_any(path, params=params)
                     show_result_json(label, data)
+                ok += 1
             except Exception as e:  # noqa: BLE001
                 print(f"{label}: ERROR {e}")
+                errors += 1
 
     finally:
         print_header("Logout")
         client.logout()
+        print_header("Summary")
+        print(f"Total: {total}, OK: {ok}, Errors: {errors}")
     return 0
 
 
