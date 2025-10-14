@@ -63,20 +63,19 @@ class RuckusClient:
     def login(self) -> str:
         """
         Obtain a serviceTicket for the configured API version.
+        v9.1 expects only username/password (no domain in payload).
         """
         last_err: Optional[str] = None
         for version in self.api_versions_to_try:
             try:
+                payload = {
+                    "username": self.username,
+                    "password": self.password,
+                }
                 resp = self.session.post(
                     self._url(version, "serviceTicket"),
                     headers=self._headers(),
-                    data=json.dumps(
-                        {
-                            "username": self.username,
-                            "password": self.password,
-                            "domain": self.domain,
-                        }
-                    ),
+                    data=json.dumps(payload),
                     timeout=20,
                 )
                 if resp.status_code == 200:
