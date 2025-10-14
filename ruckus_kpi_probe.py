@@ -142,14 +142,14 @@ class RuckusClient:
         return resp.status_code, headers, resp.content
 
     def get_aps(self, list_size: int = 1000) -> List[Dict[str, Any]]:
-        data = self._get("aps", params={"listSize": list_size})
+        data = self._get("aps", params={"listSize": min(list_size, 1000)})
         return data.get(
             "list",
             data.get("data", data if isinstance(data, list) else []),
         )
 
     def get_clients(self, list_size: int = 1000) -> List[Dict[str, Any]]:
-        data = self._get("clients", params={"listSize": list_size})
+        data = self._get("clients", params={"listSize": min(list_size, 1000)})
         return data.get(
             "list",
             data.get("data", data if isinstance(data, list) else []),
@@ -158,10 +158,10 @@ class RuckusClient:
     def get_alarms(self, list_size: int = 100) -> List[Dict[str, Any]]:
         # Some versions expose /alarms or /alarms/active
         try:
-            data = self._get("alarms/active", params={"listSize": list_size})
+            data = self._get("alarms/active", params={"listSize": min(list_size, 1000)})
             return data.get("list", data.get("data", []))
         except Exception:  # noqa: BLE001
-            data = self._get("alarms", params={"listSize": list_size})
+            data = self._get("alarms", params={"listSize": min(list_size, 1000)})
             return data.get("list", data.get("data", []))
 
     def get_cluster(self) -> Dict[str, Any]:
@@ -296,12 +296,12 @@ def main() -> int:
             print("No cluster data available")
 
         print_section("AP Inventory")
-        aps = client.get_aps(list_size=2000)
+        aps = client.get_aps(list_size=1000)
         ap_sum = summarize_aps(aps)
         print(json.dumps(ap_sum, indent=2))
 
         print_section("Clients")
-        clients = client.get_clients(list_size=5000)
+        clients = client.get_clients(list_size=1000)
         client_sum = summarize_clients(clients)
         print(json.dumps(client_sum, indent=2))
 
