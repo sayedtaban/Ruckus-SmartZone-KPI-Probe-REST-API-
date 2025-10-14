@@ -7,7 +7,7 @@ from ruckus_kpi_probe import RuckusClient
 
 # Hardcoded v9.1 configuration
 RUCKUS_BASE_URL = "https://3.12.57.221:8443"
-RUCKUS_USERNAME = "apireadonly"
+RUCKUS_USERNAME = "sshrivastava"
 RUCKUS_PASSWORD = "SBAedge2112#"
 RUCKUS_DOMAIN = "System"
 RUCKUS_VERIFY_SSL = False
@@ -89,25 +89,3 @@ def main(argv: Optional[list] = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

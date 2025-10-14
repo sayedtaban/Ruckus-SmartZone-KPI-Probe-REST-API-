@@ -10,7 +10,7 @@ from urllib3.exceptions import InsecureRequestWarning
 
 # Lab/controller configuration (hardcoded)
 RUCKUS_BASE_URL = "https://3.12.57.221:8443"
-RUCKUS_USERNAME = "apireadonly"
+RUCKUS_USERNAME = "sshrivastava"
 RUCKUS_PASSWORD = "SBAedge2112#"
 RUCKUS_DOMAIN = "System"
 RUCKUS_VERIFY_SSL = False
@@ -174,7 +174,9 @@ class RuckusClient:
 
     def get_clients(self, list_size: int = 1000) -> List[Dict[str, Any]]:
         try:
-            data = self._get("clients", params={"listSize": min(list_size, 1000)})
+            data = self._get(
+                "clients", params={"listSize": min(list_size, 1000)}
+            )
             return data.get(
                 "list",
                 data.get("data", data if isinstance(data, list) else []),
@@ -201,10 +203,14 @@ class RuckusClient:
     def get_alarms(self, list_size: int = 100) -> List[Dict[str, Any]]:
         # Some versions expose /alarms or /alarms/active
         try:
-            data = self._get("alarms/active", params={"listSize": min(list_size, 1000)})
+            data = self._get(
+                "alarms/active", params={"listSize": min(list_size, 1000)}
+            )
             return data.get("list", data.get("data", []))
         except Exception:  # noqa: BLE001
-            data = self._get("alarms", params={"listSize": min(list_size, 1000)})
+            data = self._get(
+                "alarms", params={"listSize": min(list_size, 1000)}
+            )
             return data.get("list", data.get("data", []))
 
     def get_cluster(self) -> Dict[str, Any]:
