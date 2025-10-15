@@ -14,7 +14,7 @@ RUCKUS_USERNAME = "sshrivastava"
 RUCKUS_PASSWORD = "SBAedge2112#"
 RUCKUS_DOMAIN = "System"
 RUCKUS_VERIFY_SSL = False
-RUCKUS_API_VERSION = "v9_1"
+RUCKUS_API_VERSION = "v11_0"
 
 # Suppress SSL warnings when VERIFY_SSL is false (lab environments)
 warnings.simplefilter("ignore", InsecureRequestWarning)
