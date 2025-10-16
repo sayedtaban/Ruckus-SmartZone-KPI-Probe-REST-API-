@@ -14,7 +14,16 @@ RUCKUS_USERNAME = "sshrivastava"
 RUCKUS_PASSWORD = "SBAedge2112#"
 RUCKUS_DOMAIN = "System"
 RUCKUS_VERIFY_SSL = False
-RUCKUS_API_VERSION = "v11_0"
+RUCKUS_API_VERSION = "v9_1"
+
+# Verbose logging
+LOG_VERBOSE = True
+
+
+def log(message: str) -> None:
+    if LOG_VERBOSE:
+        print(f"[LOG] {message}")
+
 
 # Suppress SSL warnings when VERIFY_SSL is false (lab environments)
 warnings.simplefilter("ignore", InsecureRequestWarning)
@@ -49,6 +58,12 @@ class RuckusClient:
         # Force v9_1 for your environment
         self.api_version = RUCKUS_API_VERSION
         self.api_versions_to_try = [RUCKUS_API_VERSION]
+        log(
+            "Client initialized base_url="
+            + self.base_url
+            + " api_version="
+            + self.api_version
+        )
 
     def _api_root(self, version: str) -> str:
         return f"{self.base_url}/wsg/api/public/{version}"
@@ -72,26 +87,49 @@ class RuckusClient:
                     "username": self.username,
                     "password": self.password,
                 }
+                log(
+                    "POST serviceTicket version="
+                    + version
+                    + " user="
+                    + self.username
+                )
                 resp = self.session.post(
                     self._url(version, "serviceTicket"),
                     headers=self._headers(),
                     data=json.dumps(payload),
                     timeout=20,
                 )
+                log("serviceTicket status=" + str(resp.status_code))
                 if resp.status_code == 200:
                     body = resp.json()
                     self.service_ticket = body.get("serviceTicket")
                     if not self.service_ticket:
                         raise RuntimeError("No serviceTicket in response")
                     self.api_version = version
+                    st_preview = (self.service_ticket or "")[:8] + "..."
+                    log(
+                        "Login OK version="
+                        + version
+                        + " ticket="
+                        + st_preview
+                    )
                     return self.service_ticket
                 else:
                     last_err = f"{resp.status_code} {resp.text}"
+                    log(
+                        "Login failed version="
+                        + version
+                        + " error="
+                        + last_err
+                    )
             except Exception as e:  # noqa: BLE001
                 last_err = str(e)
+                log("Login exception: " + last_err)
         raise RuntimeError(
             "Login failed for version "
-            f"{self.api_versions_to_try}: {last_err}"
+            + str(self.api_versions_to_try)
+            + ": "
+            + str(last_err)
         )
 
     def _get(
@@ -103,17 +141,31 @@ class RuckusClient:
             raise RuntimeError("Not logged in")
         params = dict(params or {})
         params["serviceTicket"] = self.service_ticket
+        url = self._url(self.api_version, path)
+        log("GET " + url + " params=" + str(params))
         resp = self.session.get(
-            self._url(self.api_version, path),
+            url,
             headers=self._headers(),
             params=params,
             timeout=30,
         )
+        log("GET " + path + " status=" + str(resp.status_code))
         if resp.status_code != 200:
             raise RuntimeError(
                 f"GET {path} failed: {resp.status_code} {resp.text}"
             )
-        return resp.json() if resp.text else {}
+        try:
+            data = resp.json() if resp.text else {}
+            size = (
+                len(data.get("list", []))
+                if isinstance(data, dict) and "list" in data
+                else (len(data) if isinstance(data, list) else 1)
+            )
+            log("GET " + path + " ok items=" + str(size))
+            return data
+        except Exception:
+            log("GET " + path + " ok (non-JSON)")
+            return {}
 
     # Public helpers for arbitrary endpoint testing
     def get_any(
@@ -132,30 +184,48 @@ class RuckusClient:
             raise RuntimeError("Not logged in")
         q = dict(params or {})
         q["serviceTicket"] = self.service_ticket
+        url = self._url(self.api_version, path)
+        log("GET RAW " + url + " params=" + str(q))
         resp = self.session.get(
-            self._url(self.api_version, path),
+            url,
             headers=self._headers(),
             params=q,
             timeout=60,
         )
         headers = {k: v for k, v in resp.headers.items()}
+        log(
+            "GET RAW "
+            + path
+            + " status="
+            + str(resp.status_code)
+            + " bytes="
+            + str(len(resp.content))
+        )
         return resp.status_code, headers, resp.content
 
     def get_zones(self, list_size: int = 1000) -> List[Dict[str, Any]]:
+        log("Fetching zones")
         data = self._get("rkszones", params={"listSize": min(list_size, 1000)})
-        return data.get("list", []) if isinstance(data, dict) else []
+        zones = data.get("list", []) if isinstance(data, dict) else []
+        log("Zones discovered=" + str(len(zones)))
+        return zones
 
     def get_aps(self, list_size: int = 1000) -> List[Dict[str, Any]]:
         try:
+            log("Fetching global APs")
             data = self._get("aps", params={"listSize": min(list_size, 1000)})
-            return data.get(
+            aps = data.get(
                 "list",
                 data.get("data", data if isinstance(data, list) else []),
             )
+            log("Global APs count=" + str(len(aps)))
+            return aps
         except RuntimeError as e:
             # Fallback to zone-scoped if lacking privilege
             if "403" not in str(e):
+                log("Global APs error (non-403): " + str(e))
                 raise
+            log("Global APs 403 -> fallback to per-zone APs")
             zones = self.get_zones()
             all_aps: List[Dict[str, Any]] = []
             for z in zones:
@@ -167,23 +237,32 @@ class RuckusClient:
                         f"rkszones/{zid}/aps",
                         params={"listSize": min(list_size, 1000)},
                     )
-                    all_aps.extend(zdata.get("list", []))
-                except Exception:
+                    zlist = zdata.get("list", [])
+                    log("Zone " + str(zid) + " aps=" + str(len(zlist)))
+                    all_aps.extend(zlist)
+                except Exception as ze:  # noqa: BLE001
+                    log("Zone " + str(zid) + " AP fetch error: " + str(ze))
                     continue
+            log("Aggregated APs total=" + str(len(all_aps)))
             return all_aps
 
     def get_clients(self, list_size: int = 1000) -> List[Dict[str, Any]]:
         try:
+            log("Fetching global clients")
             data = self._get(
                 "clients", params={"listSize": min(list_size, 1000)}
             )
-            return data.get(
+            clients = data.get(
                 "list",
                 data.get("data", data if isinstance(data, list) else []),
             )
+            log("Global clients count=" + str(len(clients)))
+            return clients
         except RuntimeError as e:
             if "403" not in str(e):
+                log("Global clients error (non-403): " + str(e))
                 raise
+            log("Global clients 403 -> fallback to per-zone clients")
             zones = self.get_zones()
             all_clients: List[Dict[str, Any]] = []
             for z in zones:
@@ -195,51 +274,77 @@ class RuckusClient:
                         f"rkszones/{zid}/clients",
                         params={"listSize": min(list_size, 1000)},
                     )
-                    all_clients.extend(zdata.get("list", []))
-                except Exception:
+                    zlist = zdata.get("list", [])
+                    log("Zone " + str(zid) + " clients=" + str(len(zlist)))
+                    all_clients.extend(zlist)
+                except Exception as ze:  # noqa: BLE001
+                    log(
+                        "Zone "
+                        + str(zid)
+                        + " clients fetch error: "
+                        + str(ze)
+                    )
                     continue
+            log("Aggregated clients total=" + str(len(all_clients)))
             return all_clients
 
     def get_alarms(self, list_size: int = 100) -> List[Dict[str, Any]]:
         # Some versions expose /alarms or /alarms/active
         try:
+            log("Fetching active alarms")
             data = self._get(
                 "alarms/active", params={"listSize": min(list_size, 1000)}
             )
-            return data.get("list", data.get("data", []))
-        except Exception:  # noqa: BLE001
+            alarms = data.get("list", data.get("data", []))
+            log("Active alarms count=" + str(len(alarms)))
+            return alarms
+        except Exception as e:  # noqa: BLE001
+            log("Active alarms endpoint failed: " + str(e) + " -> try /alarms")
             data = self._get(
                 "alarms", params={"listSize": min(list_size, 1000)}
             )
-            return data.get("list", data.get("data", []))
+            alarms = data.get("list", data.get("data", []))
+            log("Alarms count=" + str(len(alarms)))
+            return alarms
 
     def get_cluster(self) -> Dict[str, Any]:
         try:
-            return self._get("cluster")
-        except Exception:  # noqa: BLE001
+            log("Fetching cluster summary")
+            data = self._get("cluster")
+            log("Cluster summary fetched")
+            return data
+        except Exception as e:  # noqa: BLE001
+            log("Cluster fetch failed: " + str(e))
             return {}
 
     def get_ap_radios(self, ap_id: str) -> List[Dict[str, Any]]:
         # Optional: per-AP radio stats if supported
         try:
+            log("Fetching radios for AP " + str(ap_id))
             data = self._get(f"aps/{ap_id}/radios")
-            return data.get("list", data.get("data", []))
-        except Exception:  # noqa: BLE001
+            radios = data.get("list", data.get("data", []))
+            log("AP " + str(ap_id) + " radios count=" + str(len(radios)))
+            return radios
+        except Exception as e:  # noqa: BLE001
+            log("AP " + str(ap_id) + " radios fetch failed: " + str(e))
             return []
 
     def logout(self) -> None:
         if not self.service_ticket:
+            log("Logout skipped (no ticket)")
             return
         try:
             ticket_path = f"serviceTicket/{self.service_ticket}"
+            log("DELETE " + ticket_path)
             self.session.delete(
                 self._url(self.api_version, ticket_path),
                 headers=self._headers(),
                 timeout=10,
             )
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001
+            log("Logout error: " + str(e))
         finally:
+            log("Session closed")
             self.service_ticket = None
 
 
@@ -263,13 +368,23 @@ def summarize_aps(aps: List[Dict[str, Any]]) -> Dict[str, Any]:
         channel_value = channel_value or ap.get("channel") or "?"
         channels[str(channel_value)] = channels.get(str(channel_value), 0) + 1
     availability = (online / total * 100.0) if total else 0.0
-    return {
+    result = {
         "totalAPs": total,
         "onlineAPs": online,
         "apAvailabilityPct": round(availability, 2),
         "firmwareMix": firmware_versions,
         "channelDistribution": channels,
     }
+    log(
+        "AP summary: total="
+        + str(total)
+        + " online="
+        + str(online)
+        + " availability="
+        + str(result["apAvailabilityPct"])
+        + "%"
+    )
+    return result
 
 
 def summarize_clients(clients: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -294,7 +409,7 @@ def summarize_clients(clients: List[Dict[str, Any]]) -> Dict[str, Any]:
             roaming_fails += 1
     avg_rssi = sum(rssi_values) / len(rssi_values) if rssi_values else None
     avg_snr = sum(snr_values) / len(snr_values) if snr_values else None
-    return {
+    result = {
         "totalClients": total,
         "clientsBySsid": by_ssid,
         "clientsByBand": by_band,
@@ -302,6 +417,15 @@ def summarize_clients(clients: List[Dict[str, Any]]) -> Dict[str, Any]:
         "avgSnr": round(avg_snr, 1) if avg_snr is not None else None,
         "roamingFailCount": roaming_fails,
     }
+    log(
+        "Client summary: total="
+        + str(total)
+        + " avgRssi="
+        + str(result["avgRssi"])
+        + " avgSnr="
+        + str(result["avgSnr"])
+    )
+    return result
 
 
 def print_section(title: str) -> None:
@@ -365,8 +489,7 @@ def main() -> int:
                     or a.get("description")
                 )
                 ts = a.get("createTime") or a.get("timestamp")
-                line = "- " + f"[{sev}] " + str(msg) + " " + f"({ts})"
-                print(line)
+                print(f"- [{sev}] {msg} ({ts})")
         else:
             print("No active alarms")
 
@@ -418,7 +541,11 @@ def main() -> int:
             )
             if ap_key and ap_client_counts.get(str(ap_key), 0) == 0:
                 idle_aps.append(ap.get("name") or str(ap_key))
-        print(f"Idle APs (current snapshot, zero clients): {len(idle_aps)}")
+        msg_idle = (
+            "Idle APs (current snapshot, zero clients): "
+            + str(len(idle_aps))
+        )
+        print(msg_idle)
         for name in idle_aps[:10]:
             print(f"  - {name}")
 
